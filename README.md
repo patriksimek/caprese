@@ -1,6 +1,6 @@
 # caprese [![NPM version](https://badge.fury.io/js/caprese.png)](http://badge.fury.io/js/caprese) [![Build Status](https://secure.travis-ci.org/patriksimek/caprese.png)](http://travis-ci.org/patriksimek/caprese)
 
-Capped Log for Node.js.
+Capped Log for Node.js. A compact library with no dependencies.
 
 Capped logs are fixed-size collections of messages that work in a way similar to circular buffers: once a collection fills its allocated space, it makes room for new messages by overwriting the oldest messages in the collection.
 
@@ -41,10 +41,12 @@ cap.add(Caprese.INFO, 'My log message.');
 
 ```javascript
 var config = {
+    overwrite: false,
     size: 1024
 }
 ```
 
+- **overwrite** - Create new capped log file even if one already exist.
 - **size** - Size of capped log file in bytes. Optional. Default value is 1MB. Minimum value is 15 bytes (for one empty message). Maximum value is 4GB.
 
 <a name="caprese" />
@@ -127,7 +129,7 @@ Return Query object to query messages from capped log.
 __Example__
 
 ```javascript
-query = cap.select();
+var query = cap.select();
 ```
 
 <a name="query" />
@@ -138,7 +140,7 @@ Query messages from capped log. Each method return query, so calls can be chaine
 __Example__
 
 ```javascript
-query = cap.select().top(1).desc().go(function(err, results) {
+cap.select().top(1).desc().go(function(err, results) {
 	// ...
 });
 ```

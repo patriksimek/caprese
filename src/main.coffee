@@ -18,6 +18,7 @@ MAX_MESSAGE_SIZE = 65535
 NOOP = ->
 
 DEFAULT_OPTIONS =
+	overwrite: false
 	size: 1024 * 1024
 
 class Caprese
@@ -45,15 +46,19 @@ class Caprese
 		@options ?= DEFAULT_OPTIONS
 		callback ?= NOOP
 		
-		fs.exists file, (exist) =>
-			if exist
-				fs.open file, 'r+', (err, fd) =>
-					if err then return callback err
+		if @options.overwrite
+			@create file, callback
+		
+		else
+			fs.exists file, (exist) =>
+				if exist
+					fs.open file, 'r+', (err, fd) =>
+						if err then return callback err
+						
+						@initialize fd, callback
 					
-					@initialize fd, callback
-				
-			else
-				@create file, callback
+				else
+					@create file, callback
 	
 	_diff: (from, to) ->
 		if to > from
