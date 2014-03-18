@@ -1,0 +1,40 @@
+{
+	"author": {
+		"name": "Patrik Simek",
+		"url": "https://patriksimek.cz"
+	},
+	"name": "caprese",
+	"description": "Capped Log for Node.js",
+	"keywords": [
+		"capped",
+		"log",
+		"logger",
+		"circular"
+	],
+	"version": "0.1.0",
+	"main": "index.js",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/patriksimek/caprese"
+	},
+	"licenses": [
+		{
+			"type": "MIT",
+			"url": "http://opensource.org/licenses/mit-license.php"
+		}
+	],
+	"dependencies": {
+		
+	},
+	"devDependencies": {
+		"coffee-script": "~1.7.1",
+		"mocha": "~1.12.0"
+	},
+	"engines": {
+		"node": ">=0.8"
+	},
+	"scripts": {
+		"test": "mocha",
+		"prepublish": "coffee --compile --output ./lib ./src"
+	}
+}
