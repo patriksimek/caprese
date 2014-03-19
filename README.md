@@ -35,6 +35,7 @@ cap.add(Caprese.INFO, 'My log message.');
 * [desc](#desc)
 * [go/toArray](#go)
 * [top/limit](#top)
+* [where/filter](#where)
 
 <a name="configuration" />
 ## Configuration
@@ -42,11 +43,13 @@ cap.add(Caprese.INFO, 'My log message.');
 ```javascript
 var config = {
     overwrite: false,
+    resident: true,
     size: 1024
 }
 ```
 
 - **overwrite** - Create new capped log file even if one already exist.
+- **resident** - Create new capped log in memory. All data are lost on process exit.
 - **size** - Size of capped log file in bytes. Optional. Default value is 1MB. Minimum value is 15 bytes (for one empty message). Maximum value is 4GB.
 
 <a name="caprese" />
@@ -56,14 +59,21 @@ Open a capped log. If file doesn't exist, new capped log is created.
 
 __Arguments__
 
-- **file** - Path to capped log file.
+- **file** - Path to capped log file. Optional.
 - **config** - Config. Optional.
 - **callback(err)** - A callback which is called after capped log has loaded, or an error has occurred. Optional.
 
 __Example__
 
 ```javascript
-var cap = new Caprese('./filename.cap', { /* config */ });
+var cap = new Caprese()                                           // create 1MB resident capped log
+var cap = new Caprese('./file.cap')                               // create 1MB capped log
+var cap = new Caprese('./file.cap', {size: 1024})                 // create 1KB capped log
+var cap = new Caprese('./file.cap', {size: 1024}, function() {})  // create 1KB capped log a call a callback function
+var cap = new Caprese({size: 1024})                               // create 1KB resident capped log
+var cap = new Caprese({size: 1024}, function() {})                // create 1KB resident capped log a call a callback function
+var cap = new Caprese(function() {})                              // create 1MB resident capped log a call a callback function
+var cap = new Caprese('./file.cap', {size: 1024, resident: true}) // create 1KB resident capped log
 ```
 
 ---------------------------------------
@@ -201,6 +211,23 @@ __Example__
 
 ```javascript
 cap.select().top(limit);
+```
+
+---------------------------------------
+
+<a name="where" />
+### where() / filter()
+
+Tell query to filter messages.
+
+__Arguments__
+
+- **condition** - Key-value collection. Only type filter is available atm.
+
+__Example__
+
+```javascript
+cap.select().where({type: Caprese.ERROR});
 ```
 
 <a name="license" />

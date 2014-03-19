@@ -17,12 +17,11 @@ DB_MAX_SIZE = 4294967295
 MAX_MESSAGE_SIZE = 65535
 NOOP = ->
 
-DEFAULT_OPTIONS =
-	overwrite: false
-	size: 1024 * 1024
+DEFAULT_SIZE = 1024 * 1024
 
 class Caprese
 	fd: null
+	db: null # resident capped log
 	size: 0
 	index: null
 	first: null
@@ -35,9 +34,111 @@ class Caprese
 	@ERROR: 0x02
 	@WARNING: 0x03
 	
-	constructor: (@file, @options, callback) ->
+	###
+	new Caprese() 											- create 1MB resident capped log
+	new Caprese('./file.cap')								- create 1MB capped log
+	new Caprese('./file.cap', {size: 1024})					- create 1KB capped log
+	new Caprese('./file.cap', {size: 1024}, function() {})	- create 1KB capped log a call a callback function
+	new Caprese({size: 1024})								- create 1KB resident capped log
+	new Caprese({size: 1024}, function() {})				- create 1KB resident capped log a call a callback function
+	new Caprese(function() {})								- create 1MB resident capped log a call a callback function
+	new Caprese('./file.cap', {size: 1024, resident: true})	- create 1KB resident capped log
+	###
+	
+	constructor: ->
 		@index = []
 		@queued = []
+		
+		if arguments.length
+			if typeof arguments[0] is 'string'
+				@file = arguments[0]
+				
+				if arguments.length > 1
+					if typeof arguments[1] is 'object'
+						@options = arguments[1]
+						
+						if arguments.length > 2
+							if typeof arguments[2] is 'function'
+								callback = arguments[2]
+								
+								if arguments.length > 3
+									throw new Error "Invalid arguments."
+							
+							else
+								throw new Error "Invalid arguments."
+						
+						else
+							callback = NOOP
+						
+					else if typeof arguments[1] is 'function'
+						@options =
+							size: DEFAULT_SIZE
+						callback = arguments[1]
+					
+					else
+						throw new Error "Invalid arguments."
+				
+				else
+					@options =
+						size: DEFAULT_SIZE
+					callback = NOOP
+			
+			else if typeof arguments[0] is 'object'
+				@options = arguments[0]
+				
+				if arguments.length > 1
+					if typeof arguments[1] is 'function'
+						callback = arguments[1]
+						
+						if arguments.length > 2
+							throw new Error "Invalid arguments."
+					
+					else
+						throw new Error "Invalid arguments."
+				
+				else
+					callback = NOOP
+			
+			else if typeof arguments[0] is 'function'
+				callback = arguments[0]
+				
+				@options =
+					size: DEFAULT_SIZE
+					resident: true
+				
+				if arguments.length > 1
+					throw new Error "Invalid arguments."
+			
+			else
+				throw new Error "Invalid arguments."
+		
+		# ---
+		
+		else
+			@options =
+				size: DEFAULT_SIZE
+				resident: true
+			callback = NOOP
+		
+		if arguments.length is 0
+			@options =
+				resident: true
+				size: 1024 * 1024
+			callback = NOOP
+		
+		else if arguments.length is 1
+			if arguments[0] instanceof Function
+				@options =
+					resident: true
+					size: 1024 * 1024
+				callback = arguments[0]
+			
+			else if typeof arguments[0] is 'string'
+				@file = arguments[0]
+				@options =
+					resident: true
+					size: 1024 * 1024
+				callback = NOOP
 		
 		if @options instanceof Function
 			callback = @options
@@ -46,19 +147,23 @@ class Caprese
 		@options ?= DEFAULT_OPTIONS
 		callback ?= NOOP
 		
-		if @options.overwrite
-			@create file, callback
+		if @options.resident
+			@create null, callback
 		
 		else
-			fs.exists file, (exist) =>
-				if exist
-					fs.open file, 'r+', (err, fd) =>
-						if err then return callback err
+			if @options.overwrite
+				@create @file, callback
+			
+			else
+				fs.exists @file, (exist) =>
+					if exist
+						fs.open @file, 'r+', (err, @fd) =>
+							if err then return callback err
+							
+							@load callback
 						
-						@initialize fd, callback
-					
-				else
-					@create file, callback
+					else
+						@create @file, callback
 	
 	_diff: (from, to) ->
 		if to > from
@@ -94,7 +199,6 @@ class Caprese
 		@lock = true
 		
 		buffer = new Buffer length + ENTRY_HEADER_LENGTH
-		buffer.fill 0x00
 		buffer.writeUInt8 type, 0
 		buffer.writeUInt16LE length, 1
 		if length then buffer.write message, 3, length, 'utf8'
@@ -112,7 +216,7 @@ class Caprese
 				# update cursor in file header	
 				buffer = new Buffer 4
 				buffer.writeUInt32LE nextbyte, 0
-				fs.write @fd, buffer, 0, 4, @size + 4, (err) =>
+				@_write buffer, 0, 4, @size + 4, (err) =>
 					if err
 						@lock = false
 						return callback err
@@ -151,7 +255,7 @@ class Caprese
 		# update first in file header
 		buffer = new Buffer 4
 		buffer.writeUInt32LE first, 0
-		fs.write @fd, buffer, 0, 4, @size + 8, (err) =>
+		@_write buffer, 0, 4, @size + 8, (err) =>
 			if err then return callback null
 			
 			@first = first
@@ -164,10 +268,39 @@ class Caprese
 			return
 		
 		else
-			fs.close @fd, (err) -> callback err
+			@first = 0
+			@cursor = 0
+			@index = []
+			@queued = []
+			@lock = true
+			
+			if @fd
+				fs.close @fd, callback
+				@fd = null
+			else if @db
+				@db = null
+				process.nextTick => callback null
 	
 	count: ->
 		@index.length
+	
+	_create: (size, callback) ->
+		# first byte must be 0x00, we dont care about the rest of the file
+		buffer = new Buffer [0x00]
+		@_write buffer, 0, 1, 0, (err) =>
+			if err then return callback err
+
+			buffer = new Buffer HEADER_SIZE
+			buffer.fill 0x00
+			buffer.write 'cap', 0, 3, 'ascii'
+			buffer.writeUInt8 1, 3
+			buffer.writeUInt32LE 0, 4
+			buffer.writeUInt32LE 0, 4
+			
+			@_write buffer, 0, HEADER_SIZE, size, (err) =>
+				if err then return callback err
+			
+				@load callback
 	
 	create: (file, callback) ->
 		size = @options.size - HEADER_SIZE
@@ -177,59 +310,67 @@ class Caprese
 		
 		if size > DB_MAX_SIZE
 			return callback new Error "Maximum size is #{DB_MAX_SIZE + HEADER_SIZE}"
-
-		fs.open file, 'w+', (err, fd) =>
-			if err then return callback err
 			
-			# first byte must be 0x00, we dont care about the rest of the file
-			buffer = new Buffer [0x00]
-			fs.write fd, buffer, 0, 1, 0, (err) =>
-				if err then return callback err
-
-				buffer = new Buffer HEADER_SIZE
-				buffer.fill 0x00
-				buffer.write 'cap', 0, 3, 'ascii'
-				buffer.writeUInt8 1, 3
-				buffer.writeUInt32LE 0, 4
-				buffer.writeUInt32LE 0, 4
-				
-				fs.write fd, buffer, 0, HEADER_SIZE, size, (err) =>
-					if err then return callback err
-				
-					@initialize fd, callback
-	
-	initialize: (@fd, callback) ->
-		fs.fstat @fd, (err, stats) =>
-			if err then return callback err
-			
-			@size = stats.size - HEADER_SIZE
-			if @size < DB_MIN_SIZE
-				return callback new Error "Invalid cap file (SIZE:#{stats.size})"
-	
-			header = new Buffer HEADER_SIZE
-			fs.read @fd, header, 0, HEADER_SIZE, @size, (err) =>
-				if err then return callback err
-
-				unless header[0] is 0x63 and header[1] is 0x61 and header[2] is 0x70
-					return callback new Error "Invalid cap file (HEADER)"
-				
-				unless header[3] is 0x01
-					return callback new Error "Invalid cap file (VERSION)"
-				
-				@cursor = header.readUInt32LE 4
-				if @cursor >= @size
-					return callback new Error "Invalid cap file (CURSOR)"
-				
-				@first = header.readUInt32LE 8
-				if @first >= @size
-					return callback new Error "Invalid cap file (FIRST)"
-				
-				@reindex (err) =>
-					if err then return callback err
+		if @options.resident
+			process.nextTick =>
+				try
+					@db = new Buffer @options.size
+					@_create size, callback
 					
-					@lock = false
-					@unqueue()
-					callback null
+				catch ex
+					callback ex
+
+		else
+			fs.open file, 'w+', (err, @fd) =>
+				if err then return callback err
+				
+				@_create size, callback
+	
+	load: (callback) ->
+		if @fd
+			fs.fstat @fd, (err, stats) =>
+				if err then return callback err
+				
+				@size = stats.size - HEADER_SIZE
+				if @size < DB_MIN_SIZE
+					return callback new Error "Invalid cap file (SIZE:#{stats.size})"
+		
+				header = new Buffer HEADER_SIZE
+				@_read header, 0, HEADER_SIZE, @size, (err) =>
+					if err then return callback err
+	
+					unless header[0] is 0x63 and header[1] is 0x61 and header[2] is 0x70
+						return callback new Error "Invalid cap file (HEADER)"
+					
+					unless header[3] is 0x01
+						return callback new Error "Invalid cap file (VERSION)"
+					
+					@cursor = header.readUInt32LE 4
+					if @cursor >= @size
+						return callback new Error "Invalid cap file (CURSOR)"
+					
+					@first = header.readUInt32LE 8
+					if @first >= @size
+						return callback new Error "Invalid cap file (FIRST)"
+					
+					@reindex (err) =>
+						if err then return callback err
+						
+						@lock = false
+						@unqueue()
+						callback null
+		
+		else if @db
+			process.nextTick =>
+				@size = @db.length - HEADER_SIZE
+				@cursor = 0
+				@first = 0
+				@lock = false
+				@unqueue()
+				callback null
+		
+		else
+			process.nextTick -> callback new Error "Failed to load database"
 	
 	queue: (type, message, callback) ->
 		@queued.push
@@ -255,8 +396,27 @@ class Caprese
 		console.log "First:", @first
 		console.log "Cursor:", @cursor
 		console.log "Index:", @index
-		console.log "Buffer:", new Buffer fs.readFileSync @file, 'binary'
-
+		
+		if @fd
+			console.log "Buffer:", new Buffer fs.readFileSync @file, 'binary'
+		else if @db
+			console.log "Buffer:", @db
+	
+	_read: (buffer, offset, length, position, callback) ->
+		if @fd
+			fs.read @fd, buffer, offset, length, position, callback
+		
+		else if @db
+			process.nextTick =>
+				try
+					@db.copy buffer, offset, position, position + length
+					callback null
+				catch ex
+					callback ex
+		
+		else
+			process.nextTick -> callback new Error "No database is initialized."
+	
 	read: (offset, length, callback) ->
 		if length > @size
 			return callback new RangeError "Reading more data than size of capped file"
@@ -278,13 +438,13 @@ class Caprese
 			# read is splitted
 			part = @size - offset
 			
-			fs.read @fd, buffer, 0, part, offset, (err) =>
+			@_read buffer, 0, part, offset, (err) =>
 				if err then return callback err
 
-				fs.read @fd, buffer, part, (length - part), 0, (err) => callback err, buffer, next
+				@_read buffer, part, (length - part), 0, (err) => callback err, buffer, next
 		
 		else
-			fs.read @fd, buffer, 0, length, offset, (err) => callback err, buffer, next
+			@_read buffer, 0, length, offset, (err) => callback err, buffer, next
 	
 	reindex: (callback) ->
 		buffer = new Buffer 1
@@ -329,6 +489,21 @@ class Caprese
 		
 		fn cb
 	
+	_write: (buffer, offset, length, position, callback) ->
+		if @fd
+			fs.write @fd, buffer, offset, length, position, callback
+		
+		else if @db
+			process.nextTick =>
+				try
+					buffer.copy @db, position, offset, offset + length
+					callback null
+				catch ex
+					callback ex
+		
+		else
+			process.nextTick -> callback new Error "No database is initialized."
+	
 	write: (buffer, offset, callback) ->
 		if buffer.length > @size
 			return callback new RangeError "Writing more data than size of capped file"
@@ -343,12 +518,12 @@ class Caprese
 			# write is splitted
 			part = @size - offset
 			
-			fs.write @fd, buffer, 0, part, offset, (err) =>
+			@_write buffer, 0, part, offset, (err) =>
 				if err then return callback err
 			
-				fs.write @fd, buffer, part, (buffer.length - part), 0, (err) => callback err, next
+				@_write buffer, part, (buffer.length - part), 0, (err) => callback err, next
 		
 		else			
-			fs.write @fd, buffer, 0, buffer.length, offset, (err) => callback err, next
+			@_write buffer, 0, buffer.length, offset, (err) => callback err, next
 
 module.exports = Caprese

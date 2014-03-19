@@ -1,6 +1,7 @@
 class Query
 	_limit: 0
 	_order: 'asc'
+	_type: null
 	
 	constructor: (@log) ->
 		
@@ -13,8 +14,14 @@ class Query
 		@_order = 'desc'
 		@
 	
+	filter: (condition) ->
+		if condition?.type?
+			@_type = condition.type
+		@
+	
 	go: (callback) ->
 		filter = @log.index.slice 0
+		if @_type? then filter = filter.filter (item) => item.type is @_type
 		if @_order is 'desc' then filter.reverse()
 		if @_limit > 0 then filter.splice @_limit, filter.length - @_limit
 		
@@ -63,5 +70,8 @@ class Query
 	
 	toArray: (callback) ->
 		@go callback
+	
+	where: (condition) ->
+		@filter condition
 
 module.exports = Query

@@ -14,9 +14,11 @@ describe 'Writes', ->
 		ca = new Caprese FILE, {size: 100}, (err) ->
 			if err then return done err
 			
-			stats = fs.statSync FILE
+			unless ca.options.resident
+				stats = fs.statSync FILE
+				assert.equal stats.size, 100
+				
 			assert.equal ca.size, 88 # - 12 byte header
-			assert.equal stats.size, 100
 			
 			assert.equal ca.first, 0
 			assert.equal ca.cursor, 0
@@ -28,22 +30,22 @@ describe 'Writes', ->
 	it 'should add one entry to log', (done) ->
 		ca.add 0x01, 'Mess', (err) -> # 4 + 3
 			if err then return done err
-			
+
 			assert.equal ca.count(), 1
 			ca.select().go (err, result) ->
 				if err then return done err
-				
+
 				assert.equal result.length, 1
 				assert.equal result[0].type, 0x01
 				assert.equal result[0].message, 'Mess'
-				
+
 				assert.equal ca.first, 0
 				assert.equal ca.cursor, 7
 				assert.equal ca.index[0].offset, 3
 				assert.equal ca.index[0].length, 4
 			
 				done()
-	
+
 	it 'should add empty message', (done) ->
 		ca.add 0x01, '', (err) -> # 0 + 3
 			if err then return done err
@@ -273,9 +275,11 @@ describe 'Reads', ->
 		ca = new Caprese FILE, done
 		
 	it 'should load db', (done) ->
-		stats = fs.statSync FILE
+		unless ca.options.resident
+			stats = fs.statSync FILE
+			assert.equal stats.size, 100
+
 		assert.equal ca.size, 88 # - 12 byte header
-		assert.equal stats.size, 100
 		
 		assert.equal ca.count(), 4
 		ca.select().go (err, result) ->
@@ -305,13 +309,15 @@ describe 'Stress', ->
 	before (done) ->
 		fs.unlink FILE, -> done()
 		
-	it 'should write 10000 entries', (done) ->
-		ca = new Caprese FILE, {size: 1024}, (err) ->
+	it 'should write 10000 entries in resident log', (done) ->
+		ca = new Caprese FILE, {size: 1024, resident: true}, (err) ->
 			if err then return done err
 			
-			stats = fs.statSync FILE
+			unless ca.options.resident
+				stats = fs.statSync FILE
+				assert.equal stats.size, 1024
+			
 			assert.equal ca.size, 1012 # - 12 byte header
-			assert.equal stats.size, 1024
 			
 			complete = 0
 			for i in [1..10000]
@@ -336,6 +342,7 @@ describe 'Stress', ->
 
 first = null
 last = null
+errent = null
 
 describe 'Queries', ->
 	before (done) ->
@@ -345,11 +352,14 @@ describe 'Queries', ->
 				
 				complete = 0
 				
+				i = 0
 				int = setInterval ->
 					date = Date.now()
 					unless first then first = date
+					i++
 					
-					ca.add 0x01, date, (err) ->
+					if i is 15 then errent = date
+					ca.add (if i is 15 then Caprese.ERROR else Caprese.INFO), date, (err) ->
 						if err then return done err
 						
 						if ++complete is 50
@@ -367,13 +377,26 @@ describe 'Queries', ->
 			
 			assert.equal result[0].message, last
 			
-			ca.select().top(10).asc().go (err, result) ->
-				if err then return done err
+			done()
+		
+	it 'should return oldest entry', (done) ->
+		ca.select().top(10).asc().go (err, result) ->
+			if err then return done err
 
-				assert.equal result.length, 10
-				assert.equal result[0].message, first
-			
-				done()
+			assert.equal result.length, 10
+			assert.equal result[0].message, first
+		
+			done()
+		
+	it 'should return error entry', (done) ->
+		ca.select().where(type: Caprese.ERROR).go (err, result) ->
+			if err then return done err
+
+			assert.equal result.length, 1
+			assert.equal result[0].type, Caprese.ERROR
+			assert.equal result[0].message, errent
+		
+			done()
 	
 	after: (done) ->
 		ca.close done
