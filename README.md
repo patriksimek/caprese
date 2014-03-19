@@ -69,10 +69,10 @@ __Example__
 var cap = new Caprese()                                           // create 1MB resident capped log
 var cap = new Caprese('./file.cap')                               // create 1MB capped log
 var cap = new Caprese('./file.cap', {size: 1024})                 // create 1KB capped log
-var cap = new Caprese('./file.cap', {size: 1024}, function() {})  // create 1KB capped log a call a callback function
+var cap = new Caprese('./file.cap', {size: 1024}, function() {})  // create 1KB capped log and call a callback function
 var cap = new Caprese({size: 1024})                               // create 1KB resident capped log
-var cap = new Caprese({size: 1024}, function() {})                // create 1KB resident capped log a call a callback function
-var cap = new Caprese(function() {})                              // create 1MB resident capped log a call a callback function
+var cap = new Caprese({size: 1024}, function() {})                // create 1KB resident capped log and call a callback function
+var cap = new Caprese(function() {})                              // create 1MB resident capped log and call a callback function
 var cap = new Caprese('./file.cap', {size: 1024, resident: true}) // create 1KB resident capped log
 ```
 
