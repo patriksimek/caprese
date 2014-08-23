@@ -10,8 +10,9 @@ HEADER_SIZE = 12
 # 8-11 - 0x00000000 (first)
 
 ENTRY_TYPE_LENGTH = 1
+ENTRY_DATE_LENGTH = 4
 ENTRY_LENGTH_LENGTH = 2
-ENTRY_HEADER_LENGTH = ENTRY_TYPE_LENGTH + ENTRY_LENGTH_LENGTH
+ENTRY_HEADER_LENGTH = ENTRY_TYPE_LENGTH + ENTRY_DATE_LENGTH + ENTRY_LENGTH_LENGTH
 DB_MIN_SIZE = ENTRY_HEADER_LENGTH
 DB_MAX_SIZE = 4294967295
 MAX_MESSAGE_SIZE = 65535
@@ -31,8 +32,8 @@ class Caprese
 	_closeOnDone: false
 	
 	@INFO: 0x01
-	@ERROR: 0x02
-	@WARNING: 0x03
+	@ERROR: 0x03
+	@WARNING: 0x02
 	
 	###
 	new Caprese() 											- create 1MB resident capped log
@@ -85,6 +86,7 @@ class Caprese
 			
 			else if typeof arguments[0] is 'object'
 				@options = arguments[0]
+				@options.resident = true
 				
 				if arguments.length > 1
 					if typeof arguments[1] is 'function'
@@ -183,9 +185,19 @@ class Caprese
 		
 		next
 	
-	add: (type, message, callback = NOOP) ->
+	add: (type, date, message, callback = NOOP) ->
+		if arguments.length is 2
+			message = date
+			date = new Date()
+			
+		if arguments.length is 3
+			if message instanceof Function
+				callback = message
+				message = date
+				date = new Date()
+		
 		if @lock
-			return @queue type, message, callback
+			return @queue type, date, message, callback
 		
 		unless typeof message is 'string' then message = String message
 		length = Buffer.byteLength message, 'utf8'
@@ -200,8 +212,9 @@ class Caprese
 		
 		buffer = new Buffer length + ENTRY_HEADER_LENGTH
 		buffer.writeUInt8 type, 0
-		buffer.writeUInt16LE length, 1
-		if length then buffer.write message, 3, length, 'utf8'
+		buffer.writeUInt32LE Math.floor(date.getTime() / 1000), 1
+		buffer.writeUInt16LE length, 5
+		if length then buffer.write message, 7, length, 'utf8'
 
 		@clear buffer.length, (err) =>
 			if err
@@ -225,6 +238,7 @@ class Caprese
 						offset: @_move @cursor, ENTRY_HEADER_LENGTH
 						length: length
 						type: type
+						date: date
 
 					@cursor = nextbyte
 					@lock = false
@@ -279,7 +293,7 @@ class Caprese
 				@fd = null
 			else if @db
 				@db = null
-				process.nextTick => callback null
+				setImmediate => callback null
 	
 	count: ->
 		@index.length
@@ -293,7 +307,7 @@ class Caprese
 			buffer = new Buffer HEADER_SIZE
 			buffer.fill 0x00
 			buffer.write 'cap', 0, 3, 'ascii'
-			buffer.writeUInt8 1, 3
+			buffer.writeUInt8 2, 3
 			buffer.writeUInt32LE 0, 4
 			buffer.writeUInt32LE 0, 4
 			
@@ -312,7 +326,7 @@ class Caprese
 			return callback new Error "Maximum size is #{DB_MAX_SIZE + HEADER_SIZE}"
 			
 		if @options.resident
-			process.nextTick =>
+			setImmediate =>
 				try
 					@db = new Buffer @options.size
 					@_create size, callback
@@ -342,7 +356,7 @@ class Caprese
 					unless header[0] is 0x63 and header[1] is 0x61 and header[2] is 0x70
 						return callback new Error "Invalid cap file (HEADER)"
 					
-					unless header[3] is 0x01
+					unless header[3] is 0x02
 						return callback new Error "Invalid cap file (VERSION)"
 					
 					@cursor = header.readUInt32LE 4
@@ -361,7 +375,7 @@ class Caprese
 						callback null
 		
 		else if @db
-			process.nextTick =>
+			setImmediate =>
 				@size = @db.length - HEADER_SIZE
 				@cursor = 0
 				@first = 0
@@ -370,18 +384,19 @@ class Caprese
 				callback null
 		
 		else
-			process.nextTick -> callback new Error "Failed to load database"
+			setImmediate -> callback new Error "Failed to load database"
 	
-	queue: (type, message, callback) ->
+	queue: (type, date, message, callback) ->
 		@queued.push
 			type: type
+			date: date
 			message: message
 			callback: callback
 	
 	unqueue: ->
 		if @queued.length
 			msg = @queued.shift()
-			@add msg.type, msg.message, msg.callback
+			@add msg.type, msg.date, msg.message, msg.callback
 		
 		else
 			if @_closeOnDone
@@ -407,7 +422,7 @@ class Caprese
 			fs.read @fd, buffer, offset, length, position, callback
 		
 		else if @db
-			process.nextTick =>
+			setImmediate =>
 				try
 					@db.copy buffer, offset, position, position + length
 					callback null
@@ -415,7 +430,7 @@ class Caprese
 					callback ex
 		
 		else
-			process.nextTick -> callback new Error "No database is initialized."
+			setImmediate -> callback new Error "No database is initialized."
 	
 	read: (offset, length, callback) ->
 		if length > @size
@@ -463,21 +478,26 @@ class Caprese
 				else if buffer[0] is Caprese.INFO or buffer[0] is Caprese.ERROR or buffer[0] is Caprese.WARNING
 					type = buffer.readUInt8 0
 					cursor = nextbyte
+					
+					@read cursor, 4, (err, buffer, nextbyte) =>
+						date = buffer.readUInt32LE 0
+						cursor = nextbyte
 
-					@read cursor, 2, (err, buffer, nextbyte) =>
-						if err then return next err
-						
-						length = buffer.readUInt16LE 0
-						@index.push
-							offset: nextbyte
-							length: length
-							type: type
-						
-						cursor = @_move nextbyte, length
-						if cursor is @cursor
-							eof = true
-						
-						next null
+						@read cursor, 2, (err, buffer, nextbyte) =>
+							if err then return next err
+							
+							length = buffer.readUInt16LE 0
+							@index.push
+								offset: nextbyte
+								length: length
+								type: type
+								date: new Date(date * 1000)
+							
+							cursor = @_move nextbyte, length
+							if cursor is @cursor
+								eof = true
+							
+							next null
 				
 				else
 					next new Error "Unknown type '#{buffer[0]}' on offset '#{cursor}'"
@@ -494,7 +514,7 @@ class Caprese
 			fs.write @fd, buffer, offset, length, position, callback
 		
 		else if @db
-			process.nextTick =>
+			setImmediate =>
 				try
 					buffer.copy @db, position, offset, offset + length
 					callback null
@@ -502,7 +522,7 @@ class Caprese
 					callback ex
 		
 		else
-			process.nextTick -> callback new Error "No database is initialized."
+			setImmediate -> callback new Error "No database is initialized."
 	
 	write: (buffer, offset, callback) ->
 		if buffer.length > @size

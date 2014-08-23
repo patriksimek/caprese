@@ -2,6 +2,7 @@ class Query
 	_limit: 0
 	_order: 'asc'
 	_type: null
+	_date: null
 	
 	constructor: (@log) ->
 		
@@ -17,11 +18,14 @@ class Query
 	filter: (condition) ->
 		if condition?.type?
 			@_type = condition.type
+		else if condition?.date?
+			@_date = condition.date.$gt
 		@
 	
 	go: (callback) ->
 		filter = @log.index.slice 0
 		if @_type? then filter = filter.filter (item) => item.type is @_type
+		if @_date? then filter = filter.filter (item) => item.date > @_date
 		if @_order is 'desc' then filter.reverse()
 		if @_limit > 0 then filter.splice @_limit, filter.length - @_limit
 		
@@ -53,6 +57,7 @@ class Query
 						
 						re[index] =
 							type: item.type
+							date: item.date
 							message: buffer.toString()
 		
 						if --cd is 0
@@ -64,6 +69,9 @@ class Query
 	limit: (count) ->
 		@_limit = count
 		@
+	
+	newer: (date) ->
+		@filter date: $gt: date
 	
 	top: (count) ->
 		@limit count
